@@ -1,0 +1,34 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Fortran (gdb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "gfbuild",
+            "program": "${workspaceFolder}/a.out",
+            "cwd": "${workspaceFolder}",
+            "args": [],
+            "environment": [],
+            "stopAtEntry": false,
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "type": "bun",
+            "request": "launch",
+            "name": "Debug Bun",
+            "program": "/home/shosh/BSUIR projects/MTRAN/interpreter/lexer.js",
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "runtime": "bun"
+        }
+    ]
+}
