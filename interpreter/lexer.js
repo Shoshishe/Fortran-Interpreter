@@ -1,7 +1,10 @@
 import fs from 'bun:fs'
 import { UnexpectedCharacter, UnfinishedString } from './errors'
-import { AstPrinter } from './ast'
+import { AstPrinter, AstTreePrinter } from './ast'
 import { Parser } from './parser'
+import { Chunk, OpCode } from './bytecode'
+import { compile, interpret, vm } from './vm'
+import { TypeChecker } from './type_checker'
 
 /**
  * @readonly
@@ -11,6 +14,7 @@ export const TYPES = Object.freeze({
     IDENT: Symbol("ident"),
     STRING: Symbol("string"),
     NUMBER: Symbol("number"),
+    FP_NUMBER: Symbol("fp_number"),
     TERMINATOR: Symbol(";"),
 
     COMMA: Symbol(","),
@@ -50,9 +54,6 @@ export const TYPES = Object.freeze({
     EOF: Symbol("eof")
 })
 
-const filename = 'main.f90'
-
-
 export class Token {
     /** 
      * @param {Readonly<symbol>} type
@@ -83,7 +84,7 @@ const keywords = new Map([
 ])
 
 
-const Scanner = {
+export const Scanner = {
     line: 1,
     column: 1,
     start: 0,
@@ -91,7 +92,7 @@ const Scanner = {
     src: "",
     tokens: [],
     setData: function (src) {
-        this.src = src.toLowerCase()
+        this.src = src
     },
     peek: function () {
         if (this.offset < this.src.length) {
@@ -117,13 +118,13 @@ const Scanner = {
     },
     addToken: function (TokenType, value, line) {
         if (value === undefined) {
-            value = this.src.substring(this.start, this.offset)
+            value = this.src.substring(this.start, this.offset).toLowerCase()
         }
         this.tokens.push(new Token(TokenType, value, this.line))
     },
     isAtEnd: function () { return this.offset >= this.src.length },
     isDigit: function (char) { return char >= '0' && char <= '9' },
-    isSpace: function (char) { return char === '\n' || char === '\r' || char == " " || char == ' \t ' },
+    isSpace: function (char) { return char === '\n' || char === '\r' || char == " " || char == '\t' },
     isAlpha: function (char) { return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_' },
     isAlphaNum: function (char) { return this.isDigit(char) || this.isAlpha(char) },
     scanToken: function () {
@@ -167,10 +168,20 @@ const Scanner = {
                 }
                 break;
             case '!':
-                while (this.peek() != '\n' && !this.isAtEnd()) { this.advance(); }
-                while (this.peek() == '\n' || this.isSpace(this.peek()) && !this.isAtEnd()) {
+                while (this.peek() !== '\n') {
                     this.advance()
                 }
+                while ((this.peek() == '\n' || this.isSpace(this.peek())) && !this.isAtEnd()) {
+                    if (this.peek() == '\n') {
+                        this.line++
+                    }
+                    this.advance()
+                }
+                // while (this.peek() != '\n' && !this.isAtEnd()) { this.advance(); }
+                // while (this.peek() == '\n' && !this.isAtEnd()) {
+                //     this.line++
+                //     this.advance()
+                // }
                 break;
             case '/':
                 if (this.lookaheadOnce('=')) {
@@ -190,7 +201,7 @@ const Scanner = {
                 break;
             case '\n':
                 this.addToken(TYPES.TERMINATOR, '\n')
-                if (this.peekNext() == "\n") {
+                if (this.peek() == "\n") {
                     while (this.peekNext() == "\n") {
                         this.advance()
                         this.line++
@@ -254,7 +265,7 @@ const Scanner = {
             console.log("Unterminated string")
         }
         this.advance()
-        let value = `"${this.src.substring(this.start + 1, this.offset - 1)}"`
+        let value = `${this.src.substring(this.start + 1, this.offset - 1)}`
         this.addToken(TYPES.STRING, value)
     },
 
@@ -267,7 +278,7 @@ const Scanner = {
             while (this.isDigit(this.peek())) {
                 this.advance();
             }
-            this.addToken(TYPES.NUMBER, parseFloat(this.src.substring(this.start, this.offset)))
+            this.addToken(TYPES.FP_NUMBER, parseFloat(this.src.substring(this.start, this.offset)))
         } else if (!this.isAlpha(this.peek())) {
             this.addToken(TYPES.NUMBER, parseInt(this.src.substring(this.start, this.offset), 10))
         } else {
@@ -282,13 +293,9 @@ const Scanner = {
     }
 }
 
+const filename = 'main.f90'
+
 fs.readFile(filename, 'utf-8', (err, data) => {
-    if (err) {
-        console.log(err)
-    }
-    console.log(data)
-    Scanner.setData(data)
-    Scanner.lexAll()
 
     // let i = 1;
     // let table = `------LITERALS AND IDENTIFIERS-------\nID     | VALUE\n-------------------------------------\n`
@@ -326,7 +333,18 @@ fs.readFile(filename, 'utf-8', (err, data) => {
     // );
     // console.log(new AstPrettyPrinter().print(expr))
 
-    let parser = new Parser(Scanner.tokens)
-    let ast = parser.parse()
-    console.log(new AstPrinter().print(ast))
+    // let parser = new Parser(Scanner.tokens)
+    // let ast = parser.parse()
+    // if (!parser.hadError) {
+    //     let typeChecker = new TypeChecker()
+    //     // typeChecker.check(ast)
+    //     console.log(new AstTreePrinter().print(ast))
+    // }
+
+    // chunk.DisassembleChunk("test_chunk")
+    console.log(data)
+    let res = interpret(filename)
+    console.log(res.description)
 })
+
+// compile(filename)

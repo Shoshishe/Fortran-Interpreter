@@ -1,6 +1,6 @@
 import { ParseError } from "./errors";
 import { AssignExpression, Binary, Call, Expression, ExprVar, Grouping, Literal, Unary } from "./expr_types";
-import { ProgramStmt, Stmt, StmtElseIf, StmtExpression, StmtIf, StmtPrint, StmtVar, StmtWhile, Subroutine } from "./stmt_types"
+import { Block, Dimensions, FunctionStmt, Intent, IntentTypes, Param, Precision, ProgramStmt, Stmt, StmtElseIf, StmtExpression, StmtIf, StmtPrint, StmtVar, StmtWhile, StringLen, Subroutine, Trait, VAR_TYPES } from "./stmt_types"
 import { Token, TYPES } from "./lexer"
 
 const STATES = Object.freeze({
@@ -12,6 +12,7 @@ const STATES = Object.freeze({
 export class Parser {
     current = 0;
     state = STATES.UnitStart
+    hadError = false
     /**
      * @param {Token[]} tokens
      */
@@ -20,23 +21,15 @@ export class Parser {
     }
 
     /**
-     * @returns {Expression?}
+     * @returns {Stmt[]}
      */
     parse() {
+        let res = []
         try {
-            return this.main()
-        } catch (err) {
-            return null;
-        }
-    }
-
-    /**
-     * @returns {Expression}
-     */
-    main() {
-        try {
-            let returned = this.declaration()
-            return returned
+            while (!this.isAtEnd()) {
+                res.push(this.main())
+            }
+            return res
         } catch (err) {
             return null;
         }
@@ -45,13 +38,41 @@ export class Parser {
     /**
      * @returns {Stmt}
      */
+    main() {
+        try {
+            let returned = this.declaration()
+            if (returned instanceof StmtVar) {
+                if (returned.traits.some(e => e instanceof Intent)) {
+                    let invalidIntent = returned.traits.find(e => e instanceof Intent)
+                    this.error(invalidIntent.type, "Cannot declare intents outside of function blocks")
+                }
+            }
+            return returned
+        } catch (err) {
+            return null;
+        }
+    }
+
+
+    /**
+     * @returns {Stmt}
+     */
     declaration() {
         try {
             if (this.check(TYPES.IDENT) && isVariableType(this.peek().value)) {
-                if (this.state != STATES.Specification) {
-                    this.error(this.peek(), "Expected 0 declarations after specification part")
+                if (this.state === STATES.Execution) {
+                    this.error(this.peek(), "Expected no variable declarations in executions part")
+                } else if (this.state === STATES.UnitStart) {
+                    this.error(this.peek(), "Expected no variable declarations in global scope")
                 }
-                return this.typedDeclaration()
+                let returned = this.typedDeclaration()
+                if (returned instanceof StmtVar) {
+                    if (returned.traits.some(e => e instanceof Intent)) {
+                        let invalidIntent = returned.traits.find(e => e instanceof Intent)
+                        this.error(invalidIntent.type, "Cannot declare intents outside of function blocks")
+                    }
+                }
+                return returned
             } else if (this.check(TYPES.IDENT) && this.peek().value == "subroutine") {
                 this.advance()
                 return this.subroutine()
@@ -71,21 +92,104 @@ export class Parser {
      */
     typedDeclaration() {
         let type = this.consume(TYPES.IDENT, "Expected a type name in declaration")
+        let traits = []
+        if (this.peek().type == TYPES.LEFT_BRACE) {
+            this.consume(TYPES.LEFT_BRACE)
+            let traitName = this.consume(TYPES.IDENT, "Expected trait name during declaration")
+            this.consume(TYPES.EQUAL, "Expected equal durng trait name initialization")
+            let sz = this.consume(TYPES.NUMBER, "Expected size to be of a number type")
+            this.consume(TYPES.RIGHT_BRACE, "Expected right brace during array size declaration")
+            traits.push(new StringLen(sz.value))
+        }
+
+        while (this.match(TYPES.COMMA)) {
+            traits.push(this.trait())
+        }
         this.consume(TYPES.DECLARATION, "Expected '::' token after a type")
 
         let name = this.consume(TYPES.IDENT, "Expected a variable name")
-        let initializer = null;
+        if (this.match(TYPES.LEFT_BRACE)) {
+            traits.push(this.arrayDims())
+        }
+
+        let initializer = null
         if (this.match(TYPES.EQUAL)) {
             initializer = this.expression();
         }
+
+        if (this.peek().type == TYPES.LEFT_BRACE) {
+            this.consume(TYPES.LEFT_BRACE)
+            let sizes = []
+            do {
+                let size = this.consume(TYPES.NUMBER, "Expected number during array size declaration")
+                sizes.push(size)
+            } while (this.match(TYPES.COMMA))
+            this.consume(TYPES.RIGHT_BRACE, "Expected right brace during array size declaration")
+            let sizesTrait = traits.find(e => e instanceof Dimensions)
+            sizesTrait !== undefined ? sizesTrait.sizes.push(...sizes) : traits.push(new Dimensions(sizes))
+        }
+
         this.consume(TYPES.TERMINATOR, "Expected '\\n' after a variable declaration");
-        return new StmtVar(name.value, type, initializer);
+        return new StmtVar(name, this._identToType(type), initializer, traits);
     }
 
     /**
-     * @returns {Stmt}
+     * @param {Token} ident 
+     * @returns {Readonly<symbol>}
+     */
+    _identToType(ident) {
+        switch (ident.value) {
+            case "integer": return VAR_TYPES.INT
+            case "logical": return VAR_TYPES.BOOLEAN
+            case "real": return VAR_TYPES.REAL
+            case "character": return VAR_TYPES.CHARACTER
+            case "subroutine": return VAR_TYPES.SUBROUTINE
+        }
+    }
+    /**
+     * @returns {Trait}
+     */
+    trait() {
+        if (this.matchKeyword("dimension")) {
+            this.consume(TYPES.LEFT_BRACE, "Expected left brace in dimension declaration")
+            return this.arrayDims()
+        } else if (this.match(TYPES.LEFT_BRACE)) {
+            this.consumeKeyword("kind", "Expected kind parameter when declaring trait")
+            this.consume(TYPES.EQUAL, "Expected asignment operator when specifying kind")
+            let prec = this.consume(TYPES.NUMBER, "Expected integer when specifying precision")
+            this.consume(TYPES.RIGHT_BRACE, "Expected right brace to terminate dimension declaration")
+            return new Precision(prec)
+        } else if (this.matchKeyword("intent")) {
+            this.consume(TYPES.LEFT_BRACE, "Expected left brace after intent declaration")
+            let intent = this.consume(TYPES.IDENT, "Expected identifier to specify intent")
+            let type = Object.values(IntentTypes).find(item => item.description == intent)
+            if (type === undefined) {
+                this.error(intent, "Expected intent value to be type of in/inout/out")
+            }
+            this.consume(TYPES.RIGHT_BRACE, "Expected right brace after specifying intent")
+            return new Intent(intent)
+        }
+        this.error(this.peek(), "Expected trait specialization")
+        return undefined
+    }
+
+    /**
+     * @returns {Dimensions}
+     */
+    arrayDims() {
+        let dims = []
+        do {
+            let dim = this.consume(TYPES.NUMBER, "Expected at least one integer parameter to dimension trait")
+            dims.push(dim)
+        } while (this.match(TYPES.COMMA))
+        this.consume(TYPES.RIGHT_BRACE, "Expected right brace after dimension declarations")
+        return new Dimensions(dims)
+    }
+    /**
+     * @returns {Subroutine}
      */
     subroutine() {
+        this.state = STATES.Specification
         let subroutineName = this.consume(TYPES.IDENT, "Expected subroutine name after subroutine keyword")
         this.consume(TYPES.LEFT_BRACE, `Expected '(' after subroutine name`)
         let params = []
@@ -98,17 +202,98 @@ export class Parser {
             } while (this.match(TYPES.COMMA))
         }
         this.consume(TYPES.RIGHT_BRACE, "Expected ')' after parameters declaration")
+        this.consume(TYPES.TERMINATOR)
         let stmts = []
         while (!this.checkTwoNames("end", "subroutine")) {
-            stmts.push(this.statement())
+            stmts.push(this.declaration())
         }
         this.consume(TYPES.IDENT, "Expected end keyword after subroutine declaration")
         this.consume(TYPES.IDENT, "Expected subroutine keyword after end during subroutine declaration")
-        let closingName = this.consume(TYPES.IDENT, "Expected to get subroutine name after end subroutine statement")
-        if (closingName != subroutineName) {
-            this.error(this.peek(), `Expected subroutine name ${subroutineName} to match name ${closingName} after end subroutine statement`)
+        let closingName = this.peek()
+        if (closingName.type == TYPES.IDENT && closingName.value == subroutineName.value) {
+            this.consume(TYPES.IDENT)
         }
-        return new Subroutine()
+        this.consume(TYPES.TERMINATOR, "Expected \n after newline declaration")
+
+        /**
+         * @type {Map<string, Param>}
+         */
+        let typedParams = new Map()
+        for (let param of params) {
+            typedParams.set(param.value, new Param(param, VAR_TYPES.REAL, [IntentTypes.IN]))
+        }
+        for (let stmt of stmts) {
+            if (stmt instanceof StmtVar) {
+                let nonTypedParam = params.find(p => p.value === stmt.name.value)
+                if (nonTypedParam !== undefined) {
+                    typedParams.set(nonTypedParam.value, new Param(nonTypedParam, stmt.type, stmt.traits))
+                }
+            }
+        }
+        this.state = STATES.UnitStart
+        return new Subroutine(subroutineName, new Block(stmts), [...typedParams.values()])
+    }
+
+    /**
+     * @returns {FunctionStmt}
+     */
+    function() {
+        this.state = STATES.Specification
+        let functionName = this.consume(TYPES.IDENT, "Expected function name after function keyword")
+        this.consume(TYPES.LEFT_BRACE, `Expected '(' after subroutine name`)
+
+        /**
+         * @type {Token[]}
+         */
+        let params = []
+        if (!this.check(TYPES.RIGHT_BRACE)) {
+            do {
+                if (params.length >= 255) {
+                    this.error(this.peek(), "Can't have more than 255 parameters.")
+                }
+                params.push(this.consume(TYPES.IDENT, "expected param name"));
+            } while (this.match(TYPES.COMMA))
+        }
+        this.consume(TYPES.RIGHT_BRACE, "Expected ')' after parameters declaration")
+        this.consumeKeyword("output", "Expected output keyword after function instantination")
+
+        this.consume(TYPES.LEFT_BRACE, "Expected left brace during function output declaration")
+        let output = this.consume(TYPES.IDENT, "Expected ident to be function output value")
+        this.consume(TYPES.RIGHT_BRACE, "Expected right brace to finish function output declaration")
+        this.consume(TYPES.TERMINATOR)
+
+        let stmts = []
+        while (!this.checkTwoNames("end", "function")) {
+            stmts.push(this.declaration())
+        }
+        this.consume(TYPES.IDENT, "Expected end keyword after subroutine declaration")
+        this.consume(TYPES.IDENT, "Expected subroutine keyword after end during subroutine declaration")
+        let closingName = this.peek()
+        if (closingName.type == TYPES.IDENT && closingName.value == functionName.value) {
+            this.consume(TYPES.IDENT)
+        }
+        this.consume(TYPES.TERMINATOR, "Expected \n after newline declaration")
+
+        /**
+         * @type {Map<string, Param>}
+         */
+        let typedParams = new Map()
+        for (let param of params) {
+            typedParams.set(param.value, new Param(param, VAR_TYPES.REAL, [IntentTypes.IN]))
+        }
+        let typedOutput = new Param(output.name, VAR_TYPES.REAL)
+        for (let stmt of stmts) {
+            if (stmt instanceof StmtVar) {
+                let nonTypedParam = params.find(p => p.value === stmt.name.value)
+                if (nonTypedParam !== undefined) {
+                    typedParams.set(nonTypedParam.value, new Param(nonTypedParam, stmt.type, stmt.traits))
+                } else if (stmt.name.value === output.value) {
+                    typedOutput = new Param(output, stmt.type, stmt.traits)
+                }
+            }
+        }
+        this.state = STATES.UnitStart
+        return new FunctionStmt(functionName, new Block(stmts), typedParams, typedOutput)
     }
 
     /**
@@ -118,7 +303,19 @@ export class Parser {
         if (this.matchKeyword("print")) { this.state = STATES.Execution; return this.printStatement(); }
         if (this.matchKeyword("program")) { this.state = STATES.Execution; return this.programStatement(); }
         if (this.matchKeyword("if")) { this.state = STATES.Execution; return this.ifStatement() }
-        if (this.matchKeyword("do")) { this.state = STATES.Execution; return this.whileStatement() }
+        if (this.matchKeyword("do")) {
+            this.state = STATES.Execution;
+            if (this.next().type != TYPES.EQUAL) {
+                return this.whileStatement()
+            } else {
+                return this.forStatement()
+            }
+        }
+        if (this.matchKeyword("call")) {
+            this.state = STATES.Execution; let returned = this.call();
+            this.consume(TYPES.TERMINATOR, "Expected terminator after calling a subroutine")
+            return returned
+        }
         return this.expressionStatement();
     }
 
@@ -140,29 +337,30 @@ export class Parser {
             this.error(this.peek(), "Expected end program %ident%")
         }
         let closingName = this.peek()
-        if (closingName.type != TYPES.IDENT || closingName.value != name.value) {
-            this.error(closingName, "Expected end program %ident%, matching start decl")
+        if (closingName.type == TYPES.IDENT && closingName.value == name.value) {
+            this.consume(TYPES.IDENT)
         }
         this.state = STATES.UnitStart
-        return new ProgramStmt(name.value, statements)
+        return new ProgramStmt(name.value, new Block(statements))
     }
 
     /**
      * @returns {Stmt}
      */
     printStatement() {
+        let printKv = this.previous()
         if (this.match(TYPES.ASTERISK) || this.match(TYPES.STRING)) { return this.printStatement(); }
         this.consume(TYPES.COMMA, "Expected , after print keyword")
         let expr = this.expression();
         this.consume(TYPES.TERMINATOR, "Expected '\\n' after print statement")
-        return new StmtPrint(expr);
+        return new StmtPrint(expr, printKv.line);
     }
 
     /**
      * @returns {StmtIf}
      */
     ifStatement() {
-        this.consume(TYPES.LEFT_BRACE, "Expected '(' after 'if'.")
+        let start = this.consume(TYPES.LEFT_BRACE, "Expected '(' after 'if'.")
         let condition = this.expression()
         this.consume(TYPES.RIGHT_BRACE, "Expected ')' after if condition")
         if (!this.matchKeyword("then")) {
@@ -194,7 +392,7 @@ export class Parser {
             this.error(this.peek(), "Expected end if after if declaration")
         }
         this.consume(TYPES.TERMINATOR, "Expected new line after ending if statement")
-        return new StmtIf(condition, thenBranch, elseIfChain, elseBranch)
+        return new StmtIf(start, condition, thenBranch, elseIfChain, elseBranch)
     }
 
     /**
@@ -222,7 +420,6 @@ export class Parser {
         if (!this.matchKeyword("while")) {
             this.error(this.peek(), "Expected while keyword after do")
         }
-
         this.consume(TYPES.LEFT_BRACE, "Expected '(' after do while clause")
         let condition = this.expression()
         this.consume(TYPES.RIGHT_BRACE, "Expected ')' after condition")
@@ -235,6 +432,36 @@ export class Parser {
         this.consume(TYPES.IDENT, "Expected do keyword after do while end... to be token of ident type ")
         this.consume(TYPES.TERMINATOR, "Expected newline after do while statement termination")
         return new StmtWhile(condition, body)
+    }
+
+    /**
+     * @returns {Stmt[]}
+     */
+    forStatement() {
+        let ident = this.consume(TYPES.IDENT, "Expected ident in a do loop clause")
+        let equals = this.consume(TYPES.EQUAL, "Expected equal token in a do loop")
+        let start = this.consume(TYPES.NUMBER, "Expected integer in a start of do loop clause")
+
+        this.consume(TYPES.COMMA, "Expected comma in i..j clause in a do loop")
+        let end = this.consume(TYPES.NUMBER, "Expected integer at end of do loop clause")
+        this.consume(TYPES.TERMINATOR, "Expected statement termination after for loop ranging")
+
+        let body = []
+        while (!this.checkTwoNames("end", "do")) {
+            body.push(this.statement())
+        }
+
+        this.consume(TYPES.IDENT, "Expected end keyword after do while clause to be token of ident type")
+        this.consume(TYPES.IDENT, "Expected do keyword after do while end... to be token of ident type ")
+        this.consume(TYPES.TERMINATOR, "Expected newline after do while statement termination")
+
+        let initializer = new StmtVar(ident, VAR_TYPES.INT, new Literal(start.value, ident.line))
+        let plusToken = new Token(TYPES.PLUS, "+", 0)
+        let increment = new AssignExpression(new ExprVar(ident), new Binary(new ExprVar(ident), plusToken, new Literal(1, ident.line)), equals)
+        body = body.concat(new StmtExpression(increment))
+
+        let condition = new Binary(new ExprVar(ident), new Token(TYPES.LESS_EQUAL, "<=", 0), new Literal(end.value, ident.line))
+        return new Block([initializer, new StmtWhile(condition, body)])
     }
 
     /**
@@ -262,12 +489,8 @@ export class Parser {
             this.state = STATES.Execution
             let equals = this.previous();
             let value = this.assignment();
-
-            if (expr instanceof ExprVar) {
-                let name = expr.name;
-                return new AssignExpression(name, value);
-            }
-            this.error(equals, "Invalid assignment target.");
+            // let name = expr.name;
+            return new AssignExpression(expr, value, equals);
         }
         return expr;
     }
@@ -303,7 +526,7 @@ export class Parser {
      */
     equality() {
         let expr = this.comparison();
-        while (this.match(TYPES.EQUAL, TYPES.EQUAL_EQUAL)) {
+        while (this.match(TYPES.NOT_EQUAL, TYPES.EQUAL_EQUAL)) {
             let operator = this.previous();
             let right = this.comparison();
             expr = new Binary(expr, operator, right);
@@ -367,15 +590,19 @@ export class Parser {
             let right = this.unary();
             return new Unary(operator, right)
         }
-        return this.primary();
+        return this.call();
     }
     /**
      * @returns {Expression}
      */
     primary() {
-        if (this.match(TYPES.FALSE)) { return new Literal(false) }
-        if (this.match(TYPES.TRUE)) { return new Literal(true) }
-        if (this.match(TYPES.NUMBER, TYPES.STRING)) { return new Literal(this.previous().value) }
+        /**
+         * @type {Token}
+         */
+        if (this.match(TYPES.FALSE)) { return new Literal(false, this.previous().line) }
+        if (this.match(TYPES.TRUE)) { return new Literal(true, this.previous().line) }
+        if (this.match(TYPES.NUMBER, TYPES.STRING)) { return new Literal(this.previous().value, this.previous().line) }
+        if (this.match(TYPES.FP_NUMBER)) { return new Literal(this.previous().value, this.previous().line, true) }
         if (this.match(TYPES.IDENT)) {
             return new ExprVar(this.previous());
         }
@@ -384,7 +611,6 @@ export class Parser {
             this.consume(TYPES.RIGHT_BRACE, "Expected ')' after expression.")
             return new Grouping(expr);
         }
-
         throw this.error(this.peek(), "Expected expression.");
     }
 
@@ -422,6 +648,7 @@ export class Parser {
     }
 
     error(token, message) {
+        this.hadError = true
         this.logError(token, message);
         return new ParseError();
     }
@@ -431,9 +658,9 @@ export class Parser {
      */
     logError(token, message) {
         if (token.type == TYPES.EOF) {
-            console.log("".concat(token.line, " at end", message))
+            console.error("".concat(token.line, " at end", message))
         } else {
-            console.log(`Line ${token.line} at '${token.value}', ${message}`.replace('\n', '\\n'))
+            console.error(`Line ${token.line} at '${token.value}', ${message}`.replace('\n', '\\n'))
         }
     }
     /**
@@ -445,6 +672,18 @@ export class Parser {
         if (this.check(type)) { return this.advance(); }
         throw Error(this.peek(), message)
     }
+
+    /**
+     * @param {string} name 
+     * @param {string} message
+     * @returns {Token}
+     */
+    consumeKeyword(name, message) {
+        if (this.checkKeyword(name)) { return this.advance(); }
+        throw Error(this.peek(), message)
+    }
+
+
 
     /**
      * @param {...Token} types 
@@ -509,7 +748,6 @@ export class Parser {
         if (this.current > this.tokens.length - 2) {
             return true
         }
-
         return this.peek().value == first && this.peek().type == TYPES.IDENT && this.next().value == second && this.next().type == TYPES.IDENT
     }
 
@@ -527,12 +765,21 @@ export class Parser {
     peek() {
         return this.tokens[this.current];
     }
+
+
     /**
      * @returns {Token}
      */
     next() {
         if (this.isAtEnd()) { return this.tokens[this.tokens.length - 1] }
         return this.tokens[this.current + 1];
+    }
+    /**
+     * @returns {Token}
+     */
+    twiceNext() {
+        if (this.current > this.tokens.length - 2) { return this.tokens[this.tokens.length - 1] }
+        return this.tokens[this.current + 2];
     }
     /**
      * @returns {Token}

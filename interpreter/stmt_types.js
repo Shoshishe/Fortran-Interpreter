@@ -1,6 +1,9 @@
-import { Expression } from "./expr_types";
-import { Token } from "./lexer";
+import { Expression, ExprVar, ExprVisitor } from "./expr_types";
+import { Token, TYPES } from "./lexer";
 
+
+export const Stmts = (C) => class extends StmtVisitor { }
+export const Exprs = (C) => class extends ExprVisitor { }
 export class StmtVisitor {
     /**
      * @param {Stmt} stmt
@@ -46,6 +49,11 @@ export class StmtVisitor {
      * @param {Subroutine} stmt
      */
     visitSubroutineStmt(stmt) { }
+
+    /**
+     * @param {FunctionStmt} stmt
+     */
+    visitFunctionStmt(stmt) { }
 }
 
 export class Stmt {
@@ -92,12 +100,12 @@ export class StmtExpression extends Stmt {
 export class ProgramStmt extends Stmt {
     /**
      * @param {string} name
-     * @param {Array<Stmt>} stmts
+     * @param {Block} block
      */
-    constructor(name, stmts) {
+    constructor(name, block) {
         super()
         this.name = name;
-        this.stmts = stmts;
+        this.block = block;
     }
     /**
      * @param {StmtVisitor} visitor
@@ -110,10 +118,12 @@ export class ProgramStmt extends Stmt {
 export class StmtPrint extends Stmt {
     /**
      * @param {Expression} expr
+     * @param {number} line
      */
-    constructor(expr) {
+    constructor(expr, line) {
         super()
         this.expr = expr;
+        this.line = line
     }
     /**
      * @param {StmtVisitor} visitor
@@ -143,13 +153,15 @@ export class StmtWhile extends Stmt {
 
 export class StmtIf extends Stmt {
     /**
+     * @param {Token} start
      * @param {Expression} condition
      * @param {Stmt[]} thenBranch
      * @param {StmtElseIf[]?} elseIfChain
      * @param {Stmt[]} elseBranch
      */
-    constructor(condition, thenBranch, elseIfChain, elseBranch) {
+    constructor(start, condition, thenBranch, elseIfChain, elseBranch) {
         super();
+        this.start = start
         this.condition = condition;
         this.thenBranch = thenBranch;
         this.elseIfChain = elseIfChain;
@@ -184,20 +196,71 @@ export class StmtElseIf extends Stmt {
 export const VAR_TYPES = Object.freeze({
     INT: Symbol("integer"),
     REAL: Symbol("real"),
-    CHARACTER: Symbol("character")
+    CHARACTER: Symbol("character"),
+    BOOLEAN: Symbol("boolean"),
+    SUBROUTINE: Symbol("subroutine")
 })
+
+
+export class Trait { }
+export class Dimensions extends Trait {
+    /**
+     * @param {Token[]} sz
+     */
+    constructor(sz) {
+        super()
+        this.sizes = sz
+    }
+}
+export class Precision extends Trait {
+    /**
+     * @param {number} precision
+     */
+    constructor(precision) {
+        super()
+        this.precision = precision
+    }
+}
+
+export class StringLen extends Trait {
+    /**
+     * @param {number} len
+     */
+    constructor(len) {
+        super()
+        this.len = len
+    }
+}
+
+export const IntentTypes = Object.freeze({
+    IN: Symbol("in"),
+    INOUT: Symbol("inout"),
+    OUT: Symbol("out")
+})
+
+export class Intent extends Trait {
+    /**
+     * @param {Token} type 
+     */
+    constructor(type) {
+        super()
+        this.type = type
+    }
+}
 
 export class StmtVar extends Stmt {
     /**
-     * @param {string} name
-     * @param {Token} type
-     * @param {Expression} initializer
+     * @param {Token} name
+     * @param {Readonly<symbol>} type
+     * @param {Expression?} initializer    
+     * @param {Trait[]} traits
      */
-    constructor(name, type, initializer) {
+    constructor(name, type, initializer, traits = []) {
         super()
         this.name = name
         this.initializer = initializer
         this.type = type
+        this.traits = traits
     }
     /**
      * @param {StmtVisitor} visitor
@@ -209,9 +272,9 @@ export class StmtVar extends Stmt {
 
 export class Subroutine extends Stmt {
     /**
-     * @param {string} name
-     * @param {Stmt[]} body
-     * @param {Token[]} params
+     * @param {Token} name
+     * @param {Block} body
+     * @param {Param[]} params
      */
     constructor(name, body, params) {
         super()
@@ -224,5 +287,39 @@ export class Subroutine extends Stmt {
      */
     accept(visitor) {
         return visitor.visitSubroutineStmt(this)
+    }
+}
+
+export class Param {
+    /**
+     * @param {Token} name 
+     * @param {Readonly<symbol>} type 
+     * @param {Trait[]} traits 
+     */
+    constructor(name, type = VAR_TYPES.REAL, traits) {
+        this.name = name
+        this.type = type
+        this.traits = traits
+    }
+}
+export class FunctionStmt extends Stmt {
+    /**
+     * @param {Token} name
+     * @param {Block} body
+     * @param {Param[]} params
+     * @param {Param} output
+     */
+    constructor(name, body, params, output) {
+        super()
+        this.name = name
+        this.body = body
+        this.params = params
+        this.output = output
+    }
+    /**
+     * @param {StmtVisitor} visitor
+     */
+    accept(visitor) {
+        return visitor.visitFunctionStmt(this)
     }
 }

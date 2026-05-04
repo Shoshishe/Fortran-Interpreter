@@ -2,8 +2,6 @@
 
 import { Token } from "./lexer";
 
-
-
 export class ExprVisitor {
     //VERY-VERY-HEAVY TODO
     /**
@@ -37,7 +35,7 @@ export class ExprVisitor {
     /**
      * @param {Call} expr
      */
-    visitCallExpr(expr) {}
+    visitCallExpr(expr) { }
 
 }
 
@@ -61,13 +59,15 @@ export class Expression extends Acceptor {
 
 export class AssignExpression extends Expression {
     /**
-     * @param {Token} name
+     * @param {Expression} left
      * @param {Expression} value
+     * @param {Token} equals
      */
-    constructor(name, value) {
+    constructor(left, value, equals) {
         super()
-        this.name = name
+        this.left = left
         this.expr = value
+        this.equals = equals
     }
     /**
      * @param {ExprVisitor} visitor
@@ -96,14 +96,16 @@ export class ExprVar extends Expression {
 export class Call extends Expression {
     /**
      * @param {Token} paren
-     * @param {Expression} callee
+     * @param {ExprVar} callee
      * @param {Expression[]} args
+     * @param {boolean} isIndexing
      */
-    constructor(paren, callee, args) {
+    constructor(paren, callee, args, isIndexing = false) {
         super()
         this.paren = paren
         this.callee = callee
         this.args = args
+        this.isIndexing = isIndexing
     }
 
     /**
@@ -156,10 +158,14 @@ export class Unary extends Expression {
 export class Literal extends Expression {
     /** 
      * @param {any} value
+     * @param {number} line
+     * @param {boolean} isFp
      */
-    constructor(value) {
+    constructor(value, line, isFp=false) {
         super();
         this.value = value;
+        this.line = line
+        this.isFp = isFp
     }
     /**
      * @param {ExprVisitor} visitor
@@ -184,3 +190,4 @@ export class Grouping extends Expression {
         return visitor.visitGroupingExpr(this)
     }
 }
+
