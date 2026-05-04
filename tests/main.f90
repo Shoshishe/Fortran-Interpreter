@@ -9,4 +9,6 @@ subroutine print_matrix(matrix)
 program main
   integer,dimension(2,2)::m
   call print_matrix(m)
+  m(1,1) = 5
+  print *, m(1,1)
 end program

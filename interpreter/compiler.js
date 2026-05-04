@@ -388,9 +388,9 @@ export class Compiler extends Stmts(Exprs(CompilerBase)) {
             compiler.chunk.Write(OpCode.OP_POP)
             compiler.locals.pop()
         }
-        stmt.params.forEach(() => {
-            compiler.chunk.Write(OpCode.OP_POP)
-        })
+        // stmt.params.forEach(() => {
+        //     compiler.chunk.Write(OpCode.OP_POP)
+        // })
         let fn = compiler.endCompiler()
         if (DEBUG_PRINT_CODE) {
             fn.chunk.DisassembleChunk(`function<${fn.name}>`)

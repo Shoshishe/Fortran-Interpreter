@@ -119,7 +119,6 @@ class Vm {
      * @param {Value} item 
      */
     push(item) {
-        this.frame.slots.sp++
         this.stack.push(item)
     }
 
@@ -127,8 +126,6 @@ class Vm {
      * @returns {Value}
      */
     pop() {
-        this.frame.slots.sp--
-
         return this.stack.pop()
     }
     /**
@@ -193,7 +190,7 @@ export function compile(src) {
         return null;
     }
 
-    vm.frames.push(new CallFrame(fn, 0, new ValueArray(256, 0, vm.stack.buffer)));
+    vm.frames.push(new CallFrame(fn, 0, vm.stack));
     return fn
 }
 
@@ -442,7 +439,7 @@ function call(fn, argCount) {
         return false;
     }
 
-    vm.frames.push(new CallFrame(fn, 0, vm.frame.slots.slice(argCount+1)))
+    vm.frames.push(new CallFrame(fn, 0, vm.frame.slots.slice(argCount + 1)))
     return true;
 }
 

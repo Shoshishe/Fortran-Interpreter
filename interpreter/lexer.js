@@ -293,7 +293,7 @@ export const Scanner = {
     }
 }
 
-const filename = 'main.f90'
+const filename = 'tests/main.f90'
 
 fs.readFile(filename, 'utf-8', (err, data) => {
 
